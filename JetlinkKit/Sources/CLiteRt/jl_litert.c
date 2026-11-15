@@ -82,10 +82,6 @@ static struct {
 // LiteRT 2.2 GPU profiling is optional: missing exports must not prevent
 // normal Jetlink GPU inference from working.
 #define JL_PROFILE_FUNCTIONS(X)                 \
-  X(LrtCreateRuntimeOptions)                    \
-  X(LrtDestroyRuntimeOptions)                   \
-  X(LrtGetOpaqueRuntimeOptionsData)              \
-  X(LrtSetRuntimeOptionsEnableProfiling)         \
   X(LiteRtCompiledModelGetProfiler)              \
   X(LiteRtStartProfiler)                         \
   X(LiteRtStopProfiler)                          \
@@ -463,30 +459,22 @@ static char *describe(jl_litert_model *m) {
   return NULL;
 }
 
-// Attach a profiler only when LiteRT's optional runtime options API exists.
-// The profiler stays dormant until an offroad benchmark explicitly starts it.
+// The LiteRT 2.2.0 *Android shared library* exports the profiler APIs but NOT
+// the LrtCreateRuntimeOptions/LrtSetRuntimeOptionsEnableProfiling builder APIs
+// declared in its SDK headers. An exact format-equivalent TOML payload is
+// accepted by LiteRT compiled_model.cc when Identifier=="runtime_options_string".
+// That allows the TFLite interpreter to install its profiler before GPU setup.
+// This is supported by LiteRT's own runtime options serialization format.
 static bool add_profiler_option(jl_litert_model *m) {
   if (!profile_symbols_available) return false;
-  LrtRuntimeOptions *opts = NULL;
-  if (profile.LrtCreateRuntimeOptions(&opts) != kLiteRtStatusOk || !opts) return false;
-  bool ok = false;
-  if (profile.LrtSetRuntimeOptionsEnableProfiling(opts, true) == kLiteRtStatusOk) {
-    const char *identifier = NULL;
-    void *payload = NULL;
-    void (*deleter)(void *) = NULL;
-    if (profile.LrtGetOpaqueRuntimeOptionsData(opts, &identifier, &payload, &deleter) == kLiteRtStatusOk &&
-        identifier && payload && deleter) {
-      LiteRtOpaqueOptions opaque = NULL;
-      if (lrt.LiteRtCreateOpaqueOptions(identifier, payload, deleter, &opaque) == kLiteRtStatusOk && opaque) {
-        if (lrt.LiteRtAddOpaqueOptions(m->options, opaque) == kLiteRtStatusOk) ok = true;
-        else lrt.LiteRtDestroyOpaqueOptions(opaque);
-      } else {
-        deleter(payload);
-      }
-    }
+  char *error = add_toml(m->options, "runtime_options_string",
+                         copy("enable_profiling = true\n"));
+  if (error != NULL) {
+    // Profiling is diagnostic only; a failure must not break normal inference.
+    free(error);
+    return false;
   }
-  profile.LrtDestroyRuntimeOptions(opts);
-  return ok;
+  return true;
 }
 
 static char *compile(jl_litert_model *m, const char *path, const jl_litert_options *o) {
