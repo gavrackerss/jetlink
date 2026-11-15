@@ -12,6 +12,8 @@
 #include "litert/c/internal/litert_logging.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
+#include "litert/c/litert_profiler.h"
+#include "litert/c/options/litert_runtime_options.h"
 #include "litert/c/litert_environment.h"
 #include "litert/c/litert_model.h"
 #include "litert/c/litert_opaque_options.h"
@@ -77,6 +79,27 @@ static struct {
 #undef JL_FIELD
 } lrt;
 
+// LiteRT 2.2 GPU profiling is optional: missing exports must not prevent
+// normal Jetlink GPU inference from working.
+#define JL_PROFILE_FUNCTIONS(X)                 \
+  X(LrtCreateRuntimeOptions)                    \
+  X(LrtDestroyRuntimeOptions)                   \
+  X(LrtGetOpaqueRuntimeOptionsData)              \
+  X(LrtSetRuntimeOptionsEnableProfiling)         \
+  X(LiteRtCompiledModelGetProfiler)              \
+  X(LiteRtStartProfiler)                         \
+  X(LiteRtStopProfiler)                          \
+  X(LiteRtResetProfiler)                         \
+  X(LiteRtGetNumProfilerEvents)                  \
+  X(LiteRtGetProfilerEvents)
+
+static struct {
+#define JL_PROFILE_FIELD(name) __typeof__(&name) name;
+  JL_PROFILE_FUNCTIONS(JL_PROFILE_FIELD)
+#undef JL_PROFILE_FIELD
+} profile;
+static bool profile_symbols_available = false;
+
 static pthread_mutex_t opening = PTHREAD_MUTEX_INITIALIZER;
 static LiteRtEnvironment environment;
 // The directory LiteRT was opened from, NULL for the loader's path: kept for
@@ -92,6 +115,9 @@ struct jl_litert_model {
   LiteRtModel model;
   LiteRtOptions options;
   LiteRtCompiledModel compiled;
+  LiteRtProfiler profiler;
+  bool profiling_enabled;
+  bool profiling_active;
   size_t n_inputs;
   size_t n_outputs;
   // signature order, inputs then outputs
@@ -184,6 +210,14 @@ char *jl_litert_open(const char *directory) {
     pthread_mutex_unlock(&opening);
     return error;
   }
+  // Discover profiler functions separately from the mandatory LiteRT API.
+  profile_symbols_available = true;
+#define JL_PROFILE_LOAD(name)                                      \
+  profile.name = (__typeof__(&name))dlsym(library, #name);          \
+  if (!profile.name) profile_symbols_available = false;
+  JL_PROFILE_FUNCTIONS(JL_PROFILE_LOAD)
+#undef JL_PROFILE_LOAD
+  if (!profile_symbols_available) memset(&profile, 0, sizeof(profile));
   free(path);
 
   // LiteRT's info lines are a few per model load; warnings and errors stay.
@@ -429,6 +463,32 @@ static char *describe(jl_litert_model *m) {
   return NULL;
 }
 
+// Attach a profiler only when LiteRT's optional runtime options API exists.
+// The profiler stays dormant until an offroad benchmark explicitly starts it.
+static bool add_profiler_option(jl_litert_model *m) {
+  if (!profile_symbols_available) return false;
+  LrtRuntimeOptions *opts = NULL;
+  if (profile.LrtCreateRuntimeOptions(&opts) != kLiteRtStatusOk || !opts) return false;
+  bool ok = false;
+  if (profile.LrtSetRuntimeOptionsEnableProfiling(opts, true) == kLiteRtStatusOk) {
+    const char *identifier = NULL;
+    void *payload = NULL;
+    void (*deleter)(void *) = NULL;
+    if (profile.LrtGetOpaqueRuntimeOptionsData(opts, &identifier, &payload, &deleter) == kLiteRtStatusOk &&
+        identifier && payload && deleter) {
+      LiteRtOpaqueOptions opaque = NULL;
+      if (lrt.LiteRtCreateOpaqueOptions(identifier, payload, deleter, &opaque) == kLiteRtStatusOk && opaque) {
+        if (lrt.LiteRtAddOpaqueOptions(m->options, opaque) == kLiteRtStatusOk) ok = true;
+        else lrt.LiteRtDestroyOpaqueOptions(opaque);
+      } else {
+        deleter(payload);
+      }
+    }
+  }
+  profile.LrtDestroyRuntimeOptions(opts);
+  return ok;
+}
+
 static char *compile(jl_litert_model *m, const char *path, const jl_litert_options *o) {
   char *error = NULL;
   if (o->npu_cache_dir != NULL) {
@@ -462,6 +522,10 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
   }
   if (error != NULL) {
     return error;
+  }
+  // Profile the already-loaded GPU model; no duplicate large model compile.
+  if (o->gpu && o->npu_cache_dir == NULL) {
+    m->profiling_enabled = add_profiler_option(m);
   }
   // The log is the only word of why an NPU's plugin could not take a model,
   // so a compile for one says what it does there, partitions and all.
