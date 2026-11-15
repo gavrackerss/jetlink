@@ -56,6 +56,9 @@ const char *jl_version(void);
 
 char *jl_env_create(int log_severity, jl_env **out);
 void jl_env_release(jl_env *env);
+// Refuses a full-model test if CPU-disabled NNAPI cannot be enforced.
+// Returns NULL on success or an allocated error for jl_free.
+char *jl_nnapi_strict_preflight(void);
 
 // provider is "CoreML" or "QNN" with its options, or NULL for the CPU alone.
 // config holds session config entries ("ep.context_enable" and the like),
