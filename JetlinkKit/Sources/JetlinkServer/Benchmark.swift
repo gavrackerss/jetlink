@@ -161,6 +161,9 @@ extension EngineHost {
     var frameMs: [Double] = [], accelMs: [Double] = [], queueMs: [Double] = [], outMs: [Double] = []
     var windows: [BenchmarkWindow] = []
     var windowFrames: [Double] = []
+    var profileAttempted = false
+    var profileActive = false
+    var operatorProfile: String? = nil
     let thermalAtStart = hooks.thermal()
     let period = 1.0 / Double(ModelConstants.runFrequency)
     let warmup = EngineHost.benchmarkWarmup
@@ -194,6 +197,15 @@ extension EngineHost {
         lock.unlock()
         throw HostError.failed("the engine was unloaded during the benchmark")
       }
+      // Only three warmed frames are profiled, on the already-loaded
+      // LiteRT GPU model. The run remains a normal offroad benchmark.
+      if !profileAttempted && i >= warmup {
+        profileAttempted = true
+        profileActive = l.engine.beginOperatorProfile()
+        if !profileActive && l.engine.accelerator.uppercased().contains("GPU") {
+          operatorProfile = "The LiteRT GPU profiling API was unavailable; no per-op timings were recorded."
+        }
+      }
       let started = DispatchTime.now().uptimeNanoseconds
       var queueUs: UInt32 = 0
       do {
@@ -223,6 +235,10 @@ extension EngineHost {
         // the hidden state back into the queues, as a frame from the comma does
         l.staging.keep(outputs: out, type: io.type)
       }
+      if profileActive && i >= warmup + 2 {
+        operatorProfile = l.engine.endOperatorProfile()
+        profileActive = false
+      }
       lock.unlock()
 
       i += 1
@@ -246,6 +262,10 @@ extension EngineHost {
         progress(windows.last)
       }
     }
+    if profileActive {
+      // Also end on cancellation or if the run was shorter than three frames.
+      operatorProfile = l.engine.endOperatorProfile()
+    }
     if !windowFrames.isEmpty {
       windows.append(
         BenchmarkWindow(startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: hooks.thermal()))
@@ -254,6 +274,7 @@ extension EngineHost {
       sha256: l.sha256, device: device, seconds: round2(ProcessInfo.processInfo.systemUptime - t0), frames: frameMs.count,
       frame: BenchmarkStats.of(frameMs), accelerator: BenchmarkStats.of(accelMs), queues: BenchmarkStats.of(queueMs), output: BenchmarkStats.of(outMs),
       build: build, over35: frameMs.filter { $0 > 35 }.count, over50: frameMs.filter { $0 > 50 }.count, windows: windows,
-      thermalAtStart: thermalAtStart, thermalAtEnd: hooks.thermal(), cancelled: run.cancelled)
+      thermalAtStart: thermalAtStart, thermalAtEnd: hooks.thermal(), cancelled: run.cancelled,
+      operatorProfile: operatorProfile)
   }
 }
