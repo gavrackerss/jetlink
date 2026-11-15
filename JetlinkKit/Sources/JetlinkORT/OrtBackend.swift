@@ -25,6 +25,10 @@ public enum OrtProfile: String, CaseIterable, Sendable {
   /// fp16 whatever the graph says, so its fp32 heads are fp16 there too, and
   /// only the parity check can say whether that is close enough.
   case htpWhole = "htp-whole"
+  /// Single-shot 20 FPS feasibility test on Tensor G2, using complete
+  /// original ONNX with BOTH NNAPI and ORT CPU fallback disabled.
+  /// Unlike isolated weight-layer probes, unsupported operators fail.
+  case nnapiStrict = "nnapi-strict"
   /// The whole graph on the Adreno GPU.
   case gpu
   /// onnxruntime's CPU provider alone: for tests, the emulator and Linux,
@@ -36,7 +40,7 @@ public enum OrtProfile: String, CaseIterable, Sendable {
     #if canImport(Metal)
       [.ane, .aneWhole, .coreml, .cpu]
     #elseif os(Android)
-      [.htp, .htpWhole, .gpu, .cpu]
+      [.htp, .htpWhole, .gpu, .nnapiStrict, .cpu]
     #else
       [.cpu]
     #endif
@@ -50,6 +54,7 @@ public enum OrtProfile: String, CaseIterable, Sendable {
     case .aneWhole: [("model", .coreML("ALL"))]
     case .htp: [("vision", .htp), ("policy", .qnnGPU)]
     case .htpWhole: [("model", .htp)]
+    case .nnapiStrict: [("model", .nnapiStrict)]
     case .gpu: [("model", .qnnGPU)]
     case .cpu: [("model", .cpu)]
     }
@@ -65,7 +70,7 @@ public enum OrtProfile: String, CaseIterable, Sendable {
     case .ane, .htp: .split
     case .aneWhole, .htpWhole: .aneWhole
     case .coreml, .gpu: .whole
-    case .cpu:
+    case .cpu, .nnapiStrict:
       #if os(Android)
         .plain
       #else
@@ -93,6 +98,8 @@ enum OrtUnit: Equatable {
   case htp
   /// QNN on the Adreno GPU.
   case qnnGPU
+  /// Whole-graph NNAPI EP; missing ORT/NNAPI support is a hard failure.
+  case nnapiStrict
   case cpu
 
   /// A manifest entry's unit. QNN and CPU sessions name theirs; a CoreML one
@@ -101,6 +108,7 @@ enum OrtUnit: Equatable {
     switch entry["unit"] as? String {
     case "htp": self = .htp
     case "gpu": self = .qnnGPU
+    case "nnapi-strict": self = .nnapiStrict
     case "cpu": self = .cpu
     case nil where entry.keys.contains("units"): self = (entry["units"] as? String).map(OrtUnit.coreML) ?? .cpu
     default: return nil
@@ -112,6 +120,7 @@ enum OrtUnit: Equatable {
     case .coreML(let units): ["model": file, "units": units, "cache": "coreml-\(session)"]
     case .htp: ["model": file, "unit": "htp"]
     case .qnnGPU: ["model": file, "unit": "gpu"]
+    case .nnapiStrict: ["model": file, "unit": "nnapi-strict"]
     case .cpu: ["model": file, "unit": "cpu"]
     }
   }
@@ -178,7 +187,7 @@ public final class OrtBackend: EngineBackend {
         "qnn_context_priority": "high",
       ]
     case .qnnGPU: ["backend_type": "gpu"]
-    case .coreML, .cpu: [:]
+    case .coreML, .nnapiStrict, .cpu: [:]
     }
   }
 
@@ -189,6 +198,7 @@ public final class OrtBackend: EngineBackend {
     case .coreML(let units): SessionPlan(model: model, computeUnits: units, cacheDirectory: cache)
     case .htp: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(htp)", usesNeuralEngine: true)
     case .qnnGPU: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(gpu)", usesGPU: true)
+    case .nnapiStrict: SessionPlan(model: model, provider: "NNAPI_STRICT", label: "NNAPI(full graph, no CPU fallback)", usesNeuralEngine: true)
     case .cpu: SessionPlan(model: model, provider: nil, threads: HostChip.cpuThreads, label: "CPU")
     }
   }
@@ -204,6 +214,9 @@ public final class OrtBackend: EngineBackend {
   // MARK: build
 
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
+    // Do not even copy the 769MB ONNX unless this Android runtime can enforce
+    // no-CPU-fallback for the *whole* graph. One attempt, no layer proxies.
+    if profile == .nnapiStrict { try OrtRuntime.requireStrictNNAPI() }
     let started = Date()
     let expect = Artifact.sidecar(artifact)
     try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
@@ -231,7 +244,7 @@ public final class OrtBackend: EngineBackend {
           manifest.append(entry)
         case .htp:
           manifest.append(entry.merging(["model": try compileContext(session.name, file: part.file, in: staged, took: took, report: report)]) { $1 })
-        case .qnnGPU, .cpu:
+        case .qnnGPU, .nnapiStrict, .cpu:
           manifest.append(entry)
         }
       }

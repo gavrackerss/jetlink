@@ -1,0 +1,91 @@
+# Builds a sideloadable APK for the Pixel 7 Pro / GS201 strict NNAPI test.
+# Deliberately publishes an APK in a GitHub prerelease, not only an Actions ZIP.
+name: Tensor G2 strict NNAPI APK
+
+on:
+  push:
+    branches:
+      - feature/g2-full-model-strict-nnapi-20fps
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tensor-g2-nnapi-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-android:
+    name: Build Swift server for Android
+    uses: ./.github/workflows/android-swift.yml
+
+  publish-android:
+    name: Build, verify and publish installable APK
+    needs: swift-android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libjetlink-arm64-v8a
+          path: swift-out
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
+
+      - name: Verify bundled NNAPI provider and strict check agree
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          apk = "android/app/build/outputs/apk/release/app-release.apk"
+          with zipfile.ZipFile(apk) as z:
+              native = z.read("lib/arm64-v8a/libjetlink.so")
+              ort = z.read("lib/arm64-v8a/libonnxruntime.so")
+              assert b"NnapiExecutionProvider" in native, "strict gate expects wrong EP name"
+              assert b"NNAPIExecutionProvider" not in native, "stale strict EP check found in packaged server"
+              assert b"NnapiExecutionProvider" in ort, "NNAPI provider missing in bundled ORT"
+              assert b"OrtSessionOptionsAppendExecutionProvider_Nnapi" in ort, "NNAPI append function missing"
+          print("PASS: bundled Jetlink and ONNX Runtime agree on NnapiExecutionProvider")
+          PY
+
+      - name: Verify APK signature
+        run: |
+          TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$TOOLS/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Stage downloadable APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/Jetlink-TensorG2-NNAPI-Fix.apk
+          sha256sum dist/Jetlink-TensorG2-NNAPI-Fix.apk > dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jetlink-TensorG2-NNAPI-Fix
+          path: dist/
+          retention-days: 14
+
+      - name: Publish public direct-download APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="g2-nnapi-fix"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/Jetlink-TensorG2-NNAPI-Fix.apk dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/Jetlink-TensorG2-NNAPI-Fix.apk dist/SHA256SUMS \
+              --target "$GITHUB_SHA" --title "Jetlink Tensor G2 — NNAPI name fix" --prerelease \
+              --notes "Pixel 7 Pro / Tensor G2 experimental strict whole-model NNAPI test. Fixes the full-model provider-name mismatch. No claim of full-model NPU compatibility or 20 FPS performance. The APK is GitHub Actions debug-signed; uninstall differently signed Jetlink first."
+          fi
+          gh release view "$TAG" --json assets --jq '.assets[] | [.name, .url] | @tsv'

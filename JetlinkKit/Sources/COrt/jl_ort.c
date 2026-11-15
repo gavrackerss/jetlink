@@ -25,12 +25,14 @@ struct jl_binding {
 };
 
 #ifdef JL_ORT_DLOPEN
+static void *ort_library_handle = NULL;
 // NULL when the library or its entry point is missing; jl_env_create says why.
 static const OrtApiBase *base(void) {
   static const OrtApiBase *cached;
   if (cached == NULL) {
     void *library = dlopen("libonnxruntime.so", RTLD_NOW | RTLD_LOCAL);
     if (library != NULL) {
+      ort_library_handle = library;
       const OrtApiBase *(*get)(void) = (const OrtApiBase *(*)(void))dlsym(library, "OrtGetApiBase");
       if (get != NULL) {
         cached = get();
@@ -119,6 +121,31 @@ char *jl_env_create(int log_severity, jl_env **out) {
   return NULL;
 }
 
+// Fail-fast before touching the ~769 MB model if this specific ORT library
+// has no NNAPI EP or no dedicated C API for its CPU-disabled flags.
+// QNN-only Android variants do NOT satisfy this requirement.
+char *jl_nnapi_strict_preflight(void) {
+  if (api() == NULL) return copy("ONNX Runtime failed to load");
+  char **providers = NULL;
+  int count = 0;
+  char *error = take(api()->GetAvailableProviders(&providers, &count));
+  if (error != NULL) return error;
+  int found = 0;
+  for (int i=0;i<count;i++) {
+    if (providers[i] != NULL && strcmp(providers[i], "NnapiExecutionProvider") == 0) found = 1;
+  }
+  api()->ReleaseAvailableProviders(providers, count);
+  if (!found) return copy("FULL-MODEL COMPATIBILITY FAIL: shipped ORT lacks NnapiExecutionProvider; no model compile attempted");
+#ifdef JL_ORT_DLOPEN
+  if (!ort_library_handle || !dlsym(ort_library_handle, "OrtSessionOptionsAppendExecutionProvider_Nnapi")) {
+    return copy("FULL-MODEL COMPATIBILITY FAIL: ORT cannot enable NNAPI_FLAG_CPU_DISABLED; refusing to risk silent CPU fallback");
+  }
+#else
+  return copy("Strict NNAPI gate is Android-only");
+#endif
+  return NULL;
+}
+
 void jl_env_release(jl_env *env) {
   if (env == NULL) {
     return;
@@ -157,7 +184,29 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
   for (size_t i = 0; error == NULL && i < n_config; i++) {
     error = take(api()->AddSessionConfigEntry(so, config[i].key, config[i].value));
   }
-  if (error == NULL && provider != NULL) {
+  if (error == NULL && provider != NULL && strcmp(provider, "NNAPI_STRICT") == 0) {
+    // BOTH flags are mandatory. NNAPI_FLAG_CPU_DISABLED excludes NNAPI's
+    // nnapi-reference CPU, while the session option forbids ORT CPU EP nodes.
+    // If any node in this WHOLE model needs CPU, session creation MUST fail.
+    error = jl_nnapi_strict_preflight();
+    if (error == NULL) {
+      error = take(api()->AddSessionConfigEntry(so, "session.disable_cpu_ep_fallback", "1"));
+    }
+#ifdef JL_ORT_DLOPEN
+    if (error == NULL) {
+      typedef OrtStatus *(*NnapiAppend)(OrtSessionOptions *, uint32_t);
+      NnapiAppend append=(NnapiAppend)dlsym(ort_library_handle,
+                                          "OrtSessionOptionsAppendExecutionProvider_Nnapi");
+      if (!append) {
+        error = copy("Strict NNAPI API disappeared after preflight");
+      } else {
+        const uint32_t NNAPI_FLAG_USE_FP16 = 0x001;
+        const uint32_t NNAPI_FLAG_CPU_DISABLED = 0x004;
+        error = take(append(so, NNAPI_FLAG_USE_FP16 | NNAPI_FLAG_CPU_DISABLED));
+      }
+    }
+#endif
+  } else if (error == NULL && provider != NULL) {
     const char **keys = calloc(n_options + 1, sizeof(char *));
     const char **values = calloc(n_options + 1, sizeof(char *));
     if (keys == NULL || values == NULL) {

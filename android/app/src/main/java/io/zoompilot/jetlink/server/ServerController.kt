@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import io.zoompilot.jetlink.settings.Chip
+import io.zoompilot.jetlink.settings.Processor
 import io.zoompilot.jetlink.settings.SettingsValues
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -93,7 +94,9 @@ class ServerController(private val context: Context, private val scope: Coroutin
         // Bench tools reach the server over Wi-Fi or `adb forward`; the comma
         // comes over USB.
         put("listen", settings.developer)
-        put("usb", true)
+        // This exact full-model NNAPI test is diagnostic ONLY. Prevent the
+        // benchmark backend from serving frames to a connected comma.
+        put("usb", processor != Processor.G2FullNnapi)
         put("preload", true)
         put("chip", Chip.model)
         // a model compiled for the NPU is good for this system build alone

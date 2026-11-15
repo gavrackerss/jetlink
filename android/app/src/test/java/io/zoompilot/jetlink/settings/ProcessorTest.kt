@@ -29,6 +29,19 @@ class ProcessorTest {
     }
 
     @Test
+    fun tensorG2OffersOneStrictFullModelGate() {
+        assertEquals(
+            listOf(Processor.Auto, Processor.Gpu, Processor.G2FullNnapi, Processor.Cpu),
+            Processor.choices(
+                qualcomm = false, tensorNpu = false, emulator = false,
+                current = Processor.Auto, tensorG2 = true,
+            ),
+        )
+        assertFalse(Processor.G2FullNnapi.usesQnn)
+        assertEquals(Processor.G2FullNnapi, Processor.of("nnapi-strict"))
+    }
+
+    @Test
     fun anyOtherPhoneOffersTheGpuAndCpu() {
         // QNN on a Google Tensor leaves every op to one CPU thread; LiteRT drives its GPU
         assertEquals(
@@ -71,7 +84,7 @@ class ProcessorTest {
     fun onlyOnnxruntimesNpuAndGpuChoicesNeedQnn() {
         assertEquals(listOf(Processor.Npu, Processor.NpuGpu), Processor.entries.filter { it.usesQnn })
         assertEquals(
-            listOf(Backend.Ort, Backend.LiteRt, Backend.LiteRt, Backend.Ort, Backend.Ort),
+            listOf(Backend.Ort, Backend.LiteRt, Backend.Ort, Backend.LiteRt, Backend.Ort, Backend.Ort),
             Processor.entries.filter { it != Processor.Auto }.map { it.backend },
         )
     }

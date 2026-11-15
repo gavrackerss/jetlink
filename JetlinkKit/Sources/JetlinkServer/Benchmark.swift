@@ -219,6 +219,10 @@ extension EngineHost {
       let outputUs = microseconds(since: readStarted)
       let totalUs = microseconds(since: started)
       let accel = l.engine.lastGpuUs
+      if !finite && device.contains("nnapi-strict") {
+        lock.unlock()
+        throw HostError.failed("FULL-MODEL ACCURACY GATE FAILED: nonfinite driving output from strict NNAPI")
+      }
       if finite {
         // the hidden state back into the queues, as a frame from the comma does
         l.staging.keep(outputs: out, type: io.type)
