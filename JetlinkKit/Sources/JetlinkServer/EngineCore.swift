@@ -47,6 +47,10 @@ open class EngineCore: Engine, @unchecked Sendable {
   /// Wall time of the last `run()`.
   public private(set) var lastRunNanoseconds: UInt64 = 0
   public private(set) var lastGpuUs: UInt32 = 0
+
+  /// Overridden by GPU-capable engines; no profiling is active during normal driving.
+  open func beginOperatorProfile() -> Bool { false }
+  open func endOperatorProfile() -> String? { nil }
   public private(set) var isClosed = false
 
   private let allocator: HostAllocator

@@ -12,6 +12,8 @@
 #include "litert/c/internal/litert_logging.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
+#include "litert/c/litert_profiler.h"
+#include "litert/c/options/litert_runtime_options.h"
 #include "litert/c/litert_environment.h"
 #include "litert/c/litert_model.h"
 #include "litert/c/litert_opaque_options.h"
@@ -77,6 +79,27 @@ static struct {
 #undef JL_FIELD
 } lrt;
 
+// LiteRT 2.2 GPU profiling is optional: missing exports must not prevent
+// normal Jetlink GPU inference from working.
+#define JL_PROFILE_FUNCTIONS(X)                 \
+  X(LrtCreateRuntimeOptions)                    \
+  X(LrtDestroyRuntimeOptions)                   \
+  X(LrtGetOpaqueRuntimeOptionsData)              \
+  X(LrtSetRuntimeOptionsEnableProfiling)         \
+  X(LiteRtCompiledModelGetProfiler)              \
+  X(LiteRtStartProfiler)                         \
+  X(LiteRtStopProfiler)                          \
+  X(LiteRtResetProfiler)                         \
+  X(LiteRtGetNumProfilerEvents)                  \
+  X(LiteRtGetProfilerEvents)
+
+static struct {
+#define JL_PROFILE_FIELD(name) __typeof__(&name) name;
+  JL_PROFILE_FUNCTIONS(JL_PROFILE_FIELD)
+#undef JL_PROFILE_FIELD
+} profile;
+static bool profile_symbols_available = false;
+
 static pthread_mutex_t opening = PTHREAD_MUTEX_INITIALIZER;
 static LiteRtEnvironment environment;
 // The directory LiteRT was opened from, NULL for the loader's path: kept for
@@ -92,6 +115,9 @@ struct jl_litert_model {
   LiteRtModel model;
   LiteRtOptions options;
   LiteRtCompiledModel compiled;
+  LiteRtProfiler profiler;
+  bool profiling_enabled;
+  bool profiling_active;
   size_t n_inputs;
   size_t n_outputs;
   // signature order, inputs then outputs
@@ -184,6 +210,14 @@ char *jl_litert_open(const char *directory) {
     pthread_mutex_unlock(&opening);
     return error;
   }
+  // Discover profiler functions separately from the mandatory LiteRT API.
+  profile_symbols_available = true;
+#define JL_PROFILE_LOAD(name)                                      \
+  profile.name = (__typeof__(&name))dlsym(library, #name);          \
+  if (!profile.name) profile_symbols_available = false;
+  JL_PROFILE_FUNCTIONS(JL_PROFILE_LOAD)
+#undef JL_PROFILE_LOAD
+  if (!profile_symbols_available) memset(&profile, 0, sizeof(profile));
   free(path);
 
   // LiteRT's info lines are a few per model load; warnings and errors stay.
@@ -429,6 +463,32 @@ static char *describe(jl_litert_model *m) {
   return NULL;
 }
 
+// Attach a profiler only when LiteRT's optional runtime options API exists.
+// The profiler stays dormant until an offroad benchmark explicitly starts it.
+static bool add_profiler_option(jl_litert_model *m) {
+  if (!profile_symbols_available) return false;
+  LrtRuntimeOptions *opts = NULL;
+  if (profile.LrtCreateRuntimeOptions(&opts) != kLiteRtStatusOk || !opts) return false;
+  bool ok = false;
+  if (profile.LrtSetRuntimeOptionsEnableProfiling(opts, true) == kLiteRtStatusOk) {
+    const char *identifier = NULL;
+    void *payload = NULL;
+    void (*deleter)(void *) = NULL;
+    if (profile.LrtGetOpaqueRuntimeOptionsData(opts, &identifier, &payload, &deleter) == kLiteRtStatusOk &&
+        identifier && payload && deleter) {
+      LiteRtOpaqueOptions opaque = NULL;
+      if (lrt.LiteRtCreateOpaqueOptions(identifier, payload, deleter, &opaque) == kLiteRtStatusOk && opaque) {
+        if (lrt.LiteRtAddOpaqueOptions(m->options, opaque) == kLiteRtStatusOk) ok = true;
+        else lrt.LiteRtDestroyOpaqueOptions(opaque);
+      } else {
+        deleter(payload);
+      }
+    }
+  }
+  profile.LrtDestroyRuntimeOptions(opts);
+  return ok;
+}
+
 static char *compile(jl_litert_model *m, const char *path, const jl_litert_options *o) {
   char *error = NULL;
   if (o->npu_cache_dir != NULL) {
@@ -462,6 +522,10 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
   }
   if (error != NULL) {
     return error;
+  }
+  // Profile the already-loaded GPU model; no duplicate large model compile.
+  if (o->gpu && o->npu_cache_dir == NULL) {
+    m->profiling_enabled = add_profiler_option(m);
   }
   // The log is the only word of why an NPU's plugin could not take a model,
   // so a compile for one says what it does there, partitions and all.
@@ -656,6 +720,130 @@ void jl_litert_buffer_release(jl_litert_buffer *buffer) {
   if (buffer != NULL) {
     lrt.LiteRtDestroyTensorBuffer(handle(buffer));
   }
+}
+
+
+// Collect profile events on the SAME compiled LiteRT GPU model used by Jetlink.
+// No additional 700MB model copy. Run on the model's existing inference thread.
+#define PROFILE_TRY(name, ...)                              \
+  do {                                                      \
+    char *err = take(profile.name(__VA_ARGS__), #name);      \
+    if (err) return err;                                    \
+  } while (0)
+
+char *jl_litert_profile_start(jl_litert_model *model) {
+  if (!model || !model->compiled) return copy("LiteRT model not compiled");
+  if (!model->profiling_enabled || !profile_symbols_available) {
+    return copy("LiteRT profiler API not available in this GPU runtime");
+  }
+  if (model->profiling_active) return copy("Profiling is already active");
+  LiteRtProfiler profiler = NULL;
+  PROFILE_TRY(LiteRtCompiledModelGetProfiler, model->compiled, &profiler);
+  if (!profiler) return copy("LiteRT returned a null profiler");
+  model->profiler = profiler;
+  PROFILE_TRY(LiteRtResetProfiler, profiler);
+  PROFILE_TRY(LiteRtStartProfiler, profiler);
+  model->profiling_active = true;
+  return NULL;
+}
+
+typedef struct {
+  char tag[120];
+  ProfiledEventSource source;
+  LiteRtProfilerEventType type;
+  uint64_t elapsed_us;
+  unsigned count;
+} jl_profile_bucket;
+
+static int compare_buckets(const void *a, const void *b) {
+  const jl_profile_bucket *x = (const jl_profile_bucket *)a;
+  const jl_profile_bucket *y = (const jl_profile_bucket *)b;
+  return x->elapsed_us < y->elapsed_us ? 1 : x->elapsed_us > y->elapsed_us ? -1 : 0;
+}
+
+static void append_line(char *out, size_t cap, size_t *used, const char *fmt, ...) {
+  if (*used >= cap) return;
+  va_list ap;
+  va_start(ap, fmt);
+  int len = vsnprintf(out + *used, cap - *used, fmt, ap);
+  va_end(ap);
+  if (len > 0) *used += (size_t)len < cap - *used ? (size_t)len : cap - *used;
+}
+
+char *jl_litert_profile_finish(jl_litert_model *model, char *out, size_t cap) {
+  if (out && cap > 0) out[0] = '\0';
+  if (!model || !model->profiler || !model->profiling_active) return copy("GPU profiling was not started");
+  model->profiling_active = false;
+  if (!out || cap < 512) {
+    (void)profile.LiteRtStopProfiler(model->profiler);
+    return copy("GPU profiling output buffer too small");
+  }
+  PROFILE_TRY(LiteRtStopProfiler, model->profiler);
+  int count = 0;
+  PROFILE_TRY(LiteRtGetNumProfilerEvents, model->profiler, &count);
+  size_t used = 0;
+  append_line(out, cap, &used, "LiteRT GPU operator profiling (3 warmed frames)\n");
+  append_line(out, cap, &used, "Nested event durations are not additive; compare with Jetlink's wall-time benchmark.\n");
+  append_line(out, cap, &used, "Events recorded: %d\n", count);
+  if (count <= 0) {
+    append_line(out, cap, &used, "No operator events returned by this GPU delegate.\n");
+    return NULL;
+  }
+  if (count > 20000) {
+    append_line(out, cap, &used, "Too many events to export safely (>20000).\n");
+    return NULL;
+  }
+  ProfiledEventData *events = calloc((size_t)count, sizeof(*events));
+  jl_profile_bucket *buckets = calloc((size_t)count, sizeof(*buckets));
+  if (!events || !buckets) {
+    free(events);
+    free(buckets);
+    return copy("Out of memory reading LiteRT events");
+  }
+  LiteRtStatus status = profile.LiteRtGetProfilerEvents(model->profiler, count, events);
+  if (status != kLiteRtStatusOk) {
+    free(events);
+    free(buckets);
+    return take(status, "LiteRtGetProfilerEvents");
+  }
+  int groups = 0, gpu = 0, interpreter = 0, runtime = 0;
+  for (int i = 0; i < count; ++i) {
+    const ProfiledEventData *e = &events[i];
+    if (e->event_source == TFLITE_DELEGATE) gpu++;
+    if (e->event_source == TFLITE_INTERPRETER) interpreter++;
+    if (e->event_source == LITERT) runtime++;
+    if (!e->tag || !e->tag[0]) continue;
+    int b = 0;
+    for (; b < groups; ++b) {
+      if (buckets[b].source == e->event_source &&
+          buckets[b].type == e->event_type &&
+          strncmp(buckets[b].tag, e->tag, sizeof(buckets[b].tag) - 1) == 0) break;
+    }
+    if (b == groups) {
+      buckets[b].source = e->event_source;
+      buckets[b].type = e->event_type;
+      snprintf(buckets[b].tag, sizeof(buckets[b].tag), "%s", e->tag);
+      groups++;
+    }
+    buckets[b].elapsed_us += e->elapsed_time_us;
+    buckets[b].count++;
+  }
+  append_line(out, cap, &used, "Event sources: GPU delegate=%d, interpreter=%d, LiteRT=%d\n",
+              gpu, interpreter, runtime);
+  append_line(out, cap, &used, "Ranked by cumulative reported time (us converted to ms):\n");
+  append_line(out, cap, &used, "sum_ms  mean_ms  calls  source type  op/kernel\n");
+  qsort(buckets, (size_t)groups, sizeof(*buckets), compare_buckets);
+  for (int i = 0; i < groups && i < 60; ++i) {
+    const jl_profile_bucket *b = &buckets[i];
+    append_line(out, cap, &used, "%.3f  %.3f  %u  %d %d  %s\n",
+                b->elapsed_us / 1000., b->elapsed_us / (1000. * b->count),
+                b->count, b->source, b->type, b->tag);
+  }
+  if (groups > 60) append_line(out, cap, &used, "...%d more grouped events omitted\n", groups - 60);
+  if (!gpu) append_line(out, cap, &used, "GPU backend supplied no per-kernel events; this does NOT attribute GPU time per layer.\n");
+  free(events);
+  free(buckets);
+  return NULL;
 }
 
 char *jl_litert_run(jl_litert_model *model, jl_litert_buffer *const *inputs, size_t n_inputs,
