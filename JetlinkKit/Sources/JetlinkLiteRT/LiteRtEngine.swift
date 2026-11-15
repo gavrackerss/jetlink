@@ -33,14 +33,25 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
 
   // All calls take place on Jetlink's existing serialized frame-inference thread.
   // Never allocate a second 700MB LiteRT model for profiling.
+  private var lastOperatorProfileFailure: String?
+
   public override func beginOperatorProfile() -> Bool {
-    guard hardware == .gpu, let model else { return false }
+    lastOperatorProfileFailure = nil
+    guard hardware == .gpu, let model else {
+      lastOperatorProfileFailure = "Profiling requires an active LiteRT GPU model."
+      return false
+    }
     do {
       try model.startOperatorProfile()
       return true
     } catch {
+      lastOperatorProfileFailure = "LiteRT GPU profile could not start: \(error)"
       return false
     }
+  }
+
+  public override func operatorProfileFailure() -> String? {
+    lastOperatorProfileFailure
   }
 
   public override func endOperatorProfile() -> String? {
