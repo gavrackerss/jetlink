@@ -132,10 +132,10 @@ char *jl_nnapi_strict_preflight(void) {
   if (error != NULL) return error;
   int found = 0;
   for (int i=0;i<count;i++) {
-    if (providers[i] != NULL && strcmp(providers[i], "NNAPIExecutionProvider") == 0) found = 1;
+    if (providers[i] != NULL && strcmp(providers[i], "NnapiExecutionProvider") == 0) found = 1;
   }
   api()->ReleaseAvailableProviders(providers, count);
-  if (!found) return copy("FULL-MODEL COMPATIBILITY FAIL: shipped ORT lacks NNAPIExecutionProvider; no model compile attempted");
+  if (!found) return copy("FULL-MODEL COMPATIBILITY FAIL: shipped ORT lacks NnapiExecutionProvider; no model compile attempted");
 #ifdef JL_ORT_DLOPEN
   if (!ort_library_handle || !dlsym(ort_library_handle, "OrtSessionOptionsAppendExecutionProvider_Nnapi")) {
     return copy("FULL-MODEL COMPATIBILITY FAIL: ORT cannot enable NNAPI_FLAG_CPU_DISABLED; refusing to risk silent CPU fallback");
