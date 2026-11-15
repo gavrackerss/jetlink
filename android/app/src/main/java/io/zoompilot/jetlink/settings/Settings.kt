@@ -35,6 +35,12 @@ enum class Processor(val backend: Backend, val device: String, val title: String
      */
     TensorNpu(Backend.LiteRt, "npu", "NPU"),
 
+    /** One full, unchanged driving graph through NNAPI, CPU fallbacks forbidden.
+     * A compatibility failure is a valid negative test result, not a slow CPU
+     * benchmark. Use ONLY offroad on Pixel 7 Pro / Tensor G2.
+     */
+    G2FullNnapi(Backend.Ort, "nnapi-strict", "G2 full model · strict NNAPI"),
+
     /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
     Gpu(Backend.LiteRt, "gpu", "GPU"),
 
@@ -48,7 +54,7 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     Cpu(Backend.Ort, "cpu", "CPU");
 
     /** Runs on QNN, which needs a Snapdragon: onnxruntime anywhere but its CPU. */
-    val usesQnn: Boolean get() = backend == Backend.Ort && device != Cpu.device
+    val usesQnn: Boolean get() = this == Npu || this == NpuGpu
 
     /** The choice the server runs: Automatic's pick for this phone, or this one. */
     fun resolved(automatic: Processor = Chip.automatic): Processor = if (this == Auto) automatic else this
@@ -88,10 +94,14 @@ enum class Processor(val backend: Backend, val device: String, val title: String
          * CPU is offered on a Snapdragon only once chosen; the emulator offers
          * everything, for testing.
          */
-        fun choices(qualcomm: Boolean, tensorNpu: Boolean, emulator: Boolean, current: Processor): List<Processor> = when {
+        fun choices(
+            qualcomm: Boolean, tensorNpu: Boolean, emulator: Boolean,
+            current: Processor, tensorG2: Boolean = false
+        ): List<Processor> = when {
             emulator -> entries
-            qualcomm -> entries.filter { it != TensorNpu && (it != Cpu || current == Cpu) }
+            qualcomm -> entries.filter { it != TensorNpu && it != G2FullNnapi && (it != Cpu || current == Cpu) }
             tensorNpu -> listOf(Auto, TensorNpu, Gpu, Cpu)
+            tensorG2 -> listOf(Auto, Gpu, G2FullNnapi, Cpu)
             else -> listOf(Auto, Gpu, Cpu)
         }
 
