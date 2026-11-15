@@ -584,6 +584,20 @@ public struct BenchmarkReport: Codable, Sendable, Equatable {
       "over 35 ms: \(over35)   over 50 ms: \(over50)",
       "temperature: \(thermalAtStart) at start, \(thermalAtEnd) at end",
     ]
+    if device.contains("nnapi-strict") {
+      // One end-to-end whole-graph result: do not accept fast partial models
+      // or silent CPU fallback. A session exists only after strict NNAPI
+      // assignment, and the host rejects non-finite driving outputs.
+      let pass = !cancelled && seconds >= 59.5 && frames >= 1150
+        && frame.p99 <= 50 && over50 == 0
+        && (thermalAtEnd == "nominal" || thermalAtEnd == "fair")
+      lines.append(
+        "FULL-MODEL 20 FPS GATE: \(pass ? "PASS" : "FAIL") — strict NNAPI, CPU fallback prohibited; " +
+        "\(frames) frames, p99 \(String(format: "%.1f", frame.p99)) ms, over50 \(over50)")
+      lines.append(
+        "Accuracy limitation: outputs were checked for finiteness, NOT compared " +
+        "against reference ONNX driving predictions. NNAPI may use GPU as well as NPU.")
+    }
     if !windows.isEmpty {
       lines.append("by window:")
       for w in windows {
