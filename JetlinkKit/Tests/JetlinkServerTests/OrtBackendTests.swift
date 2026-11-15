@@ -24,6 +24,7 @@ struct OrtBackendTests {
       (.aneWhole, ["model"], [.coreML("ALL")], "aneWhole"),
       (.htp, ["vision", "policy"], [.htp, .qnnGPU], "split"),
       (.htpWhole, ["model"], [.htp], "aneWhole"),
+      (.nnapiStrict, ["model"], [.nnapiStrict], cpuLayout),
       (.gpu, ["model"], [.qnnGPU], "whole"),
       (.cpu, ["model"], [.cpu], cpuLayout),
     ]
@@ -37,7 +38,7 @@ struct OrtBackendTests {
     #if canImport(Metal)
       #expect(OrtProfile.available == [.ane, .aneWhole, .coreml, .cpu])
     #elseif os(Android)
-      #expect(OrtProfile.available == [.htp, .htpWhole, .gpu, .cpu])
+      #expect(OrtProfile.available == [.htp, .htpWhole, .gpu, .nnapiStrict, .cpu])
     #else
       #expect(OrtProfile.available == [.cpu])
     #endif
@@ -57,6 +58,8 @@ struct OrtBackendTests {
     #expect(npu.provider == "QNN" && npu.label == "QNN(htp)" && npu.usesNeuralEngine && !npu.usesGPU)
     let gpu = backend.plan(.qnnGPU, model: model, cache: nil)
     #expect(gpu.provider == "QNN" && gpu.label == "QNN(gpu)" && gpu.usesGPU)
+    let strict = backend.plan(.nnapiStrict, model: model, cache: nil)
+    #expect(strict.provider == "NNAPI_STRICT" && strict.usesNeuralEngine && !strict.usesGPU)
     let cpu = backend.plan(.cpu, model: model, cache: nil)
     #expect(cpu.provider == nil && cpu.label == "CPU" && cpu.threads == HostChip.cpuThreads)
     let coreML = backend.plan(.coreML("ALL"), model: model, cache: URL(fileURLWithPath: "/tmp/coreml-model"))
@@ -71,7 +74,7 @@ struct OrtBackendTests {
   /// Apple artifacts.
   @Test("Manifest entries, old and new, read back to their units")
   func manifestEntries() {
-    for unit in [OrtUnit.coreML("CPUAndNeuralEngine"), .coreML("ALL"), .htp, .qnnGPU, .cpu] {
+    for unit in [OrtUnit.coreML("CPUAndNeuralEngine"), .coreML("ALL"), .htp, .qnnGPU, .nnapiStrict, .cpu] {
       #expect(OrtUnit(entry: unit.entry(model: "model.onnx", session: "model")) == unit, "\(unit)")
     }
     #expect(OrtUnit.coreML("CPUAndGPU").entry(model: "policy.onnx", session: "policy")["cache"] as? String == "coreml-policy")
