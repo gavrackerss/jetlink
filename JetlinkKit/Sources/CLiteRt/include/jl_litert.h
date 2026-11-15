@@ -112,6 +112,12 @@ void jl_litert_buffer_release(jl_litert_buffer *buffer);
 char *jl_litert_run(jl_litert_model *model, jl_litert_buffer *const *inputs, size_t n_inputs,
                     jl_litert_buffer *const *outputs, size_t n_outputs);
 
+// Starts and finishes a short offroad operator profile on the compiled model.
+// A success return is NULL; failures are allocated and released with
+// jl_litert_free. The result is a NUL-terminated text report.
+char *jl_litert_profile_start(jl_litert_model *model);
+char *jl_litert_profile_finish(jl_litert_model *model, char *out, size_t out_cap);
+
 void jl_litert_free(void *p);
 
 #ifdef __cplusplus
