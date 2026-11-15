@@ -545,11 +545,13 @@ public struct BenchmarkReport: Codable, Sendable, Equatable {
   public let thermalAtStart: String
   public let thermalAtEnd: String
   public let cancelled: Bool
+  /// Three-frame LiteRT operator profile, when the engine exposes it.
+  public let operatorProfile: String?
 
   public init(
     sha256: String, device: String, seconds: Double, frames: Int, frame: BenchmarkStats, accelerator: BenchmarkStats, queues: BenchmarkStats,
     output: BenchmarkStats, build: String, over35: Int, over50: Int, windows: [BenchmarkWindow], thermalAtStart: String, thermalAtEnd: String,
-    cancelled: Bool
+    cancelled: Bool, operatorProfile: String? = nil
   ) {
     self.sha256 = sha256
     self.device = device
@@ -566,6 +568,7 @@ public struct BenchmarkReport: Codable, Sendable, Equatable {
     self.thermalAtStart = thermalAtStart
     self.thermalAtEnd = thermalAtEnd
     self.cancelled = cancelled
+    self.operatorProfile = operatorProfile
   }
 
   /// The report as text, to paste into an issue or a note.
@@ -589,6 +592,10 @@ public struct BenchmarkReport: Codable, Sendable, Equatable {
       for w in windows {
         lines.append(String(format: "  %4d s  mean %5.1f  p99 %5.1f  max %5.1f ms  ", w.startSecond, w.frame.mean, w.frame.p99, w.frame.max) + w.thermal)
       }
+    }
+    if let operatorProfile, !operatorProfile.isEmpty {
+      lines.append("operator profile (3 warmed frames):")
+      lines.append(operatorProfile)
     }
     return lines.joined(separator: "\n")
   }
