@@ -203,7 +203,7 @@ extension EngineHost {
         profileAttempted = true
         profileActive = l.engine.beginOperatorProfile()
         if !profileActive && l.engine.accelerator.uppercased().contains("GPU") {
-          operatorProfile = "The LiteRT GPU profiling API was unavailable; no per-op timings were recorded."
+          operatorProfile = l.engine.operatorProfileFailure() ?? "The LiteRT GPU profiling API was unavailable; no per-op timings were recorded."
         }
       }
       let started = DispatchTime.now().uptimeNanoseconds
