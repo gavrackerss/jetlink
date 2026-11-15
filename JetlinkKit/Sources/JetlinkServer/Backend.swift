@@ -60,6 +60,9 @@ public protocol Engine: AnyObject {
   func warm() throws -> String
   /// Logs the engine's own timing so far: a benchmark's end.
   func flushTiming()
+  /// Optional in-engine operator profiling during offroad benchmarks.
+  func beginOperatorProfile() -> Bool
+  func endOperatorProfile() -> String?
   func close()
 }
 
@@ -90,6 +93,8 @@ extension Engine {
   public var coolsWhenIdle: Bool { false }
   public func runIdle() throws { try run() }
   public func flushTiming() {}
+  public func beginOperatorProfile() -> Bool { false }
+  public func endOperatorProfile() -> String? { nil }
 }
 
 extension EngineBackend {
