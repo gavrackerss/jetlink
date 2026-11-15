@@ -291,21 +291,51 @@ static const char gpu_backend[] = "";
 // which on an M1 Pro made the whole cache of Cinque Terre V3 772 MB (a 2 s
 // load against a 7 s compile). The programs are what an OpenCL GPU compiles
 // slowly; Metal writes no such cache.
+// Offroad GPU A/B experiments. We preserve original default options exactly.
+// Other modes change ONE LiteRT v2.2 GPU option at a time.
+static const char *gpu_tune(void) {
+  const char *value = getenv("JETLINK_GPU_TUNE");
+  if (!value || !*value) return "default";
+  if (strcmp(value, "texture_weights") == 0 ||
+      strcmp(value, "buffer_storage") == 0 ||
+      strcmp(value, "high_priority") == 0) return value;
+  return "default";
+}
+
 static char *gpu_toml(const jl_litert_options *o) {
+  const char *mode = gpu_tune();
+  const char *tune = "";
+  if (strcmp(mode, "texture_weights") == 0) {
+    // LiteRT 2.2: large fixed-weight convolution kernels may benefit from
+    // reading immutable weights from GPU texture storage.
+    tune = "prefer_texture_weights = true\n";
+  } else if (strcmp(mode, "buffer_storage") == 0) {
+    // Force GPU buffer storage; measure against the default auto selection.
+    tune = "buffer_storage_type = 1\n";
+  } else if (strcmp(mode, "high_priority") == 0) {
+    // Higher GPU queue priority, keeping fp16 precision unchanged.
+    tune = "priority = 3\n";
+  }
   if (o->cache_dir == NULL || o->cache_key == NULL) {
-    return format("precision = %d\n%s", kLiteRtDelegatePrecisionFp16, gpu_backend);
+    return format("precision = %d\n%s%s",
+                  kLiteRtDelegatePrecisionFp16, gpu_backend, tune);
   }
   char *dir = escaped(o->cache_dir);
-  char *key = escaped(o->cache_key);
+  // Prevent any tuned mode accidentally replaying baseline's OpenCL shader
+  // cache. The original baseline key remains byte-for-byte unchanged.
+  char *salted = strcmp(mode, "default") == 0
+      ? copy(o->cache_key) : format("%s-gpu-tune-%s", o->cache_key, mode);
+  char *key = salted ? escaped(salted) : NULL;
   char *toml = NULL;
   if (dir != NULL && key != NULL) {
     toml = format(
-        "precision = %d\n%sserialization_dir = \"%s\"\nmodel_cache_key = \"%s\"\nserialize_program_cache = true\n"
-        "cache_only_compiled_programs = true\n",
-        kLiteRtDelegatePrecisionFp16, gpu_backend, dir, key);
+        "precision = %d\n%s%sserialization_dir = \"%s\"\nmodel_cache_key = \"%s\"\n"
+        "serialize_program_cache = true\ncache_only_compiled_programs = true\n",
+        kLiteRtDelegatePrecisionFp16, gpu_backend, tune, dir, key);
   }
   free(dir);
   free(key);
+  free(salted);
   return toml;
 }
 
