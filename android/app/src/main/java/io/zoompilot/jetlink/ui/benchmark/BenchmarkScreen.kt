@@ -1,5 +1,7 @@
 package io.zoompilot.jetlink.ui.benchmark
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Dangerous
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Movie
@@ -47,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,6 +87,9 @@ import io.zoompilot.jetlink.ui.components.SummaryCard
 import io.zoompilot.jetlink.ui.components.share
 import io.zoompilot.jetlink.ui.components.tile
 import io.zoompilot.jetlink.ui.icon
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 /** The phone's chip, as the run card names it. */
@@ -114,6 +121,33 @@ fun BenchmarkScreen(graph: AppGraph) {
     val settings by graph.settings.values.collectAsStateWithLifecycle()
     var refusal by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
+    var exportStatus by remember { mutableStateOf<String?>(null) }
+    var chosenModel by remember { mutableStateOf<File?>(null) }
+    val scope = rememberCoroutineScope()
+    val exportDocument = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { destination ->
+        val source = chosenModel
+        chosenModel = null
+        if (destination == null || source == null) {
+            exporting = false
+            exportStatus = "Export cancelled."
+        } else {
+            exporting = true
+            exportStatus = "Exporting LiteRT model (streaming directly, without a second cache copy)…"
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { GpuModelExporter.export(context, source, destination) }
+                }
+                exporting = false
+                exportStatus = result.fold(
+                    onSuccess = { "Export complete: %.1f MiB; TFLite SHA256 %s".format(it.mib, it.sha256) },
+                    onFailure = { "Export failed: ${it.message}. The chosen document may be incomplete." },
+                )
+            }
+        }
+    }
     val processor = settings.processor.resolved()
     val chip = remember(processor) { ChipInfo.current(processor) }
     val actions = BenchmarkActions(
@@ -138,6 +172,32 @@ fun BenchmarkScreen(graph: AppGraph) {
             TopAppBar(
                 title = { Text("Benchmark", fontWeight = FontWeight.Bold) },
                 actions = {
+                    val loadedGpu = BenchmarkText.loadedSha(snapshot) != null &&
+                        snapshot.engine.accelerator?.startsWith("GPU", ignoreCase = true) == true
+                    IconButton(
+                        onClick = {
+                            val sha = BenchmarkText.loadedSha(snapshot) ?: return@IconButton
+                            exporting = true
+                            exportStatus = "Locating SHA-matched GPU model…"
+                            scope.launch {
+                                val found = withContext(Dispatchers.IO) {
+                                    runCatching { GpuModelExporter.locate(graph.server.cacheDirectory, sha) }
+                                }
+                                exporting = false
+                                found.fold(
+                                    onSuccess = {
+                                        chosenModel = it
+                                        exportStatus = null
+                                        exportDocument.launch("LightSpeed2-${sha.take(16)}-GPU.tflite")
+                                    },
+                                    onFailure = { exportStatus = "Cannot export: ${it.message}" },
+                                )
+                            }
+                        },
+                        enabled = loadedGpu && !exporting && !BenchmarkText.running(snapshot),
+                    ) {
+                        Icon(Icons.Filled.FileDownload, contentDescription = "Export prepared GPU LiteRT model")
+                    }
                     if (report != null && reportText != null) {
                         IconButton(onClick = { share(context, reportText, "Jetlink Benchmark") }) {
                             Icon(Icons.Filled.Share, contentDescription = "Share")
@@ -151,17 +211,27 @@ fun BenchmarkScreen(graph: AppGraph) {
             )
         },
     ) { padding ->
-        BenchmarkContent(
-            snapshot = snapshot,
-            runState = runState,
-            // what the loaded engine runs on, which a Tensor NPU that took no model leaves to the GPU
-            processor = Processor.hardwareOf(snapshot.engine.accelerator) ?: processor.title,
-            chip = chip,
-            refusal = refusal,
-            starting = starting,
-            actions = actions,
-            modifier = Modifier.padding(padding).consumeWindowInsets(padding),
-        )
+        Column(Modifier.padding(padding).consumeWindowInsets(padding)) {
+            exportStatus?.let { message ->
+                Text(
+                    message,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (exporting) LinearProgressIndicator(Modifier.fillMaxWidth())
+            BenchmarkContent(
+                snapshot = snapshot,
+                runState = runState,
+                // what the loaded engine runs on, which a Tensor NPU that took no model leaves to the GPU
+                processor = Processor.hardwareOf(snapshot.engine.accelerator) ?: processor.title,
+                chip = chip,
+                refusal = refusal,
+                starting = starting,
+                actions = actions,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
