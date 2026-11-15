@@ -21,6 +21,8 @@ object Chip {
 
     /** A Google Tensor whose NPU LiteRT compiles for: "Tensor G3" (the Pixel 8) or later. */
     val hasTensorNpu: Boolean by lazy { (tensorGeneration(model) ?: 0) >= 3 }
+    /** Pixel 7 Pro Tensor G2 identifies itself as GS201, not always "Tensor G2". */
+    val isTensorG2: Boolean get() = model.equals("GS201", ignoreCase = true) || tensorGeneration(model) == 2
 
     private val tensorModel = Regex("^Tensor G(\\d+)$")
 
@@ -28,7 +30,8 @@ object Chip {
     fun tensorGeneration(model: String): Int? = tensorModel.find(model.trim())?.groupValues?.get(1)?.toIntOrNull()
 
     /** What this phone's Settings offer. */
-    fun processors(current: Processor): List<Processor> = Processor.choices(isQualcomm, hasTensorNpu, isEmulator, current)
+    fun processors(current: Processor): List<Processor> =
+        Processor.choices(isQualcomm, hasTensorNpu, isEmulator, current, tensorG2 = isTensorG2)
 
     /** What Automatic runs on here. */
     val automatic: Processor by lazy { Processor.automatic(hasTensorNpu, isEmulator) }
