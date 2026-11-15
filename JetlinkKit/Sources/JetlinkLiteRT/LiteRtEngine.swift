@@ -31,6 +31,27 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   public override var notes: String { stateOnDevice ? "state on the \(hardware.name)" : "" }
   public override var accelerator: String { label }
 
+  // All calls take place on Jetlink's existing serialized frame-inference thread.
+  // Never allocate a second 700MB LiteRT model for profiling.
+  public override func beginOperatorProfile() -> Bool {
+    guard hardware == .gpu, let model else { return false }
+    do {
+      try model.startOperatorProfile()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  public override func endOperatorProfile() -> String? {
+    guard let model else { return nil }
+    do {
+      return try model.finishOperatorProfile()
+    } catch {
+      return "LiteRT GPU profiling error: \(error)"
+    }
+  }
+
   private var model: LiteRtModel?
   /// Every buffer a run reads or writes, alive as long as the sets below.
   private var buffers: [LiteRtBuffer] = []
