@@ -725,6 +725,12 @@ void jl_litert_buffer_release(jl_litert_buffer *buffer) {
 
 // Collect profile events on the SAME compiled LiteRT GPU model used by Jetlink.
 // No additional 700MB model copy. Run on the model's existing inference thread.
+#define PROFILE_TRY(name, ...)                              \
+  do {                                                      \
+    char *err = take(profile.name(__VA_ARGS__), #name);      \
+    if (err) return err;                                    \
+  } while (0)
+
 char *jl_litert_profile_start(jl_litert_model *model) {
   if (!model || !model->compiled) return copy("LiteRT model not compiled");
   if (!model->profiling_enabled || !profile_symbols_available) {
@@ -732,11 +738,11 @@ char *jl_litert_profile_start(jl_litert_model *model) {
   }
   if (model->profiling_active) return copy("Profiling is already active");
   LiteRtProfiler profiler = NULL;
-  TRY(LiteRtCompiledModelGetProfiler, model->compiled, &profiler);
+  PROFILE_TRY(LiteRtCompiledModelGetProfiler, model->compiled, &profiler);
   if (!profiler) return copy("LiteRT returned a null profiler");
   model->profiler = profiler;
-  TRY(LiteRtResetProfiler, profiler);
-  TRY(LiteRtStartProfiler, profiler);
+  PROFILE_TRY(LiteRtResetProfiler, profiler);
+  PROFILE_TRY(LiteRtStartProfiler, profiler);
   model->profiling_active = true;
   return NULL;
 }
@@ -772,9 +778,9 @@ char *jl_litert_profile_finish(jl_litert_model *model, char *out, size_t cap) {
     (void)profile.LiteRtStopProfiler(model->profiler);
     return copy("GPU profiling output buffer too small");
   }
-  TRY(LiteRtStopProfiler, model->profiler);
+  PROFILE_TRY(LiteRtStopProfiler, model->profiler);
   int count = 0;
-  TRY(LiteRtGetNumProfilerEvents, model->profiler, &count);
+  PROFILE_TRY(LiteRtGetNumProfilerEvents, model->profiler, &count);
   size_t used = 0;
   append_line(out, cap, &used, "LiteRT GPU operator profiling (3 warmed frames)\n");
   append_line(out, cap, &used, "Nested event durations are not additive; compare with Jetlink's wall-time benchmark.\n");
