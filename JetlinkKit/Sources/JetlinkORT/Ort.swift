@@ -6,6 +6,13 @@ import JetlinkServer
 public enum OrtRuntime {
   public static var version: String { String(cString: jl_version()) }
 
+  /// Requires the NNAPI provider and both CPU-fallback blockers before a
+  /// whole-model load. Fails before costly ONNX re-preparation if unsupported.
+  public static func requireStrictNNAPI() throws {
+    try load()
+    try OrtError.check(jl_nnapi_strict_preflight())
+  }
+
   /// Opens onnxruntime and makes the process's environment, or throws why it
   /// cannot: on Linux and Android the library is opened at run time, and a
   /// machine may not have it.
