@@ -50,6 +50,7 @@ open class EngineCore: Engine, @unchecked Sendable {
 
   /// Overridden by GPU-capable engines; no profiling is active during normal driving.
   open func beginOperatorProfile() -> Bool { false }
+  open func operatorProfileFailure() -> String? { nil }
   open func endOperatorProfile() -> String? { nil }
   public private(set) var isClosed = false
 
