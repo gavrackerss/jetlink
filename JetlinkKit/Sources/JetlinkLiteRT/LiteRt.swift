@@ -199,6 +199,20 @@ final class LiteRtModel: @unchecked Sendable {
     }
   }
 
+  /// Profiling is optional and disabled during driving. The compiled GPU model
+  /// remains the same; LiteRT records just a few warmed benchmark frames.
+  func startOperatorProfile() throws {
+    try LiteRtError.check(jl_litert_profile_start(pointer))
+  }
+
+  func finishOperatorProfile() throws -> String {
+    var chars = [CChar](repeating: 0, count: 32768)
+    try chars.withUnsafeMutableBufferPointer { bytes in
+      try LiteRtError.check(jl_litert_profile_finish(pointer, bytes.baseAddress, bytes.count))
+    }
+    return String(cString: chars)
+  }
+
   deinit {
     jl_litert_model_release(pointer)
   }
