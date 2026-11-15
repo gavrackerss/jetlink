@@ -1,5 +1,5 @@
 #include <jni.h>
-#include <NeuralNetworks.h>
+#include <android/NeuralNetworks.h>
 #include <stdint.h>
 #include <stdio.h>
 
