@@ -30,12 +30,12 @@ android {
     ndkVersion = "30.0.16248370"
 
     defaultConfig {
-        applicationId = "io.zoompilot.jetlink.android"
+        applicationId = "dev.tensorprobe.g6nnapi"
         // Android 12: Build.SOC_MODEL and the performance hint API.
         minSdk = 31
         targetSdk = 36
-        versionCode = jetlinkVersionCode
-        versionName = jetlinkVersion
+        versionCode = 1
+        versionName = "0.1-g6-nnapi"
         // The QNN runtime is arm64 only, and so is every Snapdragon with an NPU
         // worth driving on. The emulator on an Apple silicon Mac is arm64 too.
         ndk { abiFilters += "arm64-v8a" }
@@ -72,6 +72,13 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     packaging {

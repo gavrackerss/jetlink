@@ -1,0 +1,105 @@
+name: Tensor G6 full-model NNAPI APK
+
+on:
+  push:
+    branches: [probe/g6-full-model-nnapi]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: g6-nnapi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Reuse verified unchanged Swift server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git diff --exit-code c740ba36e6cef705baee51244bde1372be575d08 -- JetlinkKit android/scripts/swift-build.sh
+          gh api repos/gavrackerss/jetlink/actions/artifacts/14170720259/zip > swift-native.zip
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          archive = pathlib.Path('swift-native.zip')
+          expected = 'ff316a6321a830d8489d9bbcb85a4d3d29dc39d8783998cee63ccec3414c8d92'
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected
+          target = pathlib.Path('swift-out').resolve()
+          with zipfile.ZipFile(archive) as z:
+              for member in z.infolist():
+                  assert (target / member.filename).resolve().is_relative_to(target)
+              z.extractall(target)
+          assert (target / 'arm64-v8a/libjetlink.so').is_file()
+          print('Verified native artifact from c740ba36; Swift/C server source unchanged.')
+          PY
+
+      - name: Test and build release APK
+        working-directory: android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
+
+      - name: Verify APK and record provenance
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/Jetlink_Pixel11_G6_FullModel_NNAPI_v0.1.apk
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, zipfile
+          apk = pathlib.Path('dist/Jetlink_Pixel11_G6_FullModel_NNAPI_v0.1.apk')
+          with zipfile.ZipFile(apk) as z:
+              native = z.read('lib/arm64-v8a/libjetlink.so')
+              ort = z.read('lib/arm64-v8a/libonnxruntime.so')
+              inventory = z.read('lib/arm64-v8a/libg6nnapiinventory.so')
+              assert b'NnapiExecutionProvider' in native
+              assert b'NNAPIExecutionProvider' not in native
+              assert b'session.disable_cpu_ep_fallback' in native
+              assert b'NnapiExecutionProvider' in ort
+              assert b'OrtSessionOptionsAppendExecutionProvider_Nnapi' in ort
+              assert b'ANeuralNetworks_getDeviceCount' in inventory
+              assert b'ANeuralNetworksDevice_getType' in inventory
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          pathlib.Path('dist/SHA256SUMS').write_text(f'{digest}  {apk.name}\n')
+          manifest = {
+              'source_commit': os.environ['GITHUB_SHA'],
+              'native_source_commit': 'c740ba36e6cef705baee51244bde1372be575d08',
+              'native_build_run': 43735850543,
+              'native_artifact_sha256': 'ff316a6321a830d8489d9bbcb85a4d3d29dc39d8783998cee63ccec3414c8d92',
+              'package': 'dev.tensorprobe.g6nnapi',
+              'apk_sha256': digest,
+              'ls2_original_onnx_sha256': '909a140019050a9d7f00db22dd4f4085928d2af9474a82244672ddab964f95a8',
+              'model_bundled': False,
+              'device_execution_tested': False,
+              'numerical_parity_verified': False,
+              '20_fps_verified': False,
+          }
+          pathlib.Path('dist/BUILD.json').write_text(json.dumps(manifest, indent=2)+'\n')
+          print(json.dumps(manifest, indent=2))
+          PY
+          TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$TOOLS/apksigner" verify --verbose --print-certs dist/Jetlink_Pixel11_G6_FullModel_NNAPI_v0.1.apk
+          "$TOOLS/aapt2" dump badging dist/Jetlink_Pixel11_G6_FullModel_NNAPI_v0.1.apk | head -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jetlink-Pixel11-G6-FullModel-NNAPI-v0.1
+          path: dist/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: G6-NNAPI-test-results
+          path: android/app/build/test-results/
+          retention-days: 14

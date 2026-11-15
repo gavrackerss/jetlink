@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(g6nnapiinventory C)
+add_library(g6nnapiinventory SHARED nnapi_inventory.c)
+target_compile_options(g6nnapiinventory PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(g6nnapiinventory neuralnetworks)
+target_link_options(g6nnapiinventory PRIVATE -Wl,-z,max-page-size=16384)

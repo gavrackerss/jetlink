@@ -23,6 +23,7 @@ object Chip {
     val hasTensorNpu: Boolean by lazy { (tensorGeneration(model) ?: 0) >= 3 }
     /** Pixel 7 Pro Tensor G2 identifies itself as GS201, not always "Tensor G2". */
     val isTensorG2: Boolean get() = model.equals("GS201", ignoreCase = true) || tensorGeneration(model) == 2
+    val isTensorG6: Boolean get() = tensorGeneration(model) == 6
 
     private val tensorModel = Regex("^Tensor G(\\d+)$")
 
@@ -31,7 +32,7 @@ object Chip {
 
     /** What this phone's Settings offer. */
     fun processors(current: Processor): List<Processor> =
-        Processor.choices(isQualcomm, hasTensorNpu, isEmulator, current, tensorG2 = isTensorG2)
+        Processor.choices(isQualcomm, hasTensorNpu, isEmulator, current, tensorG2 = isTensorG2, tensorG6 = isTensorG6)
 
     /** What Automatic runs on here. */
     val automatic: Processor by lazy { Processor.automatic(hasTensorNpu, isEmulator) }

@@ -220,6 +220,13 @@ fun BenchmarkScreen(graph: AppGraph) {
                 )
             }
             if (exporting) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (processor == Processor.G2FullNnapi) {
+                Text(
+                    "Full-model NNAPI test. Timing uses generated inputs; numerical accuracy is unverified. Vehicle connections are disabled.",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             BenchmarkContent(
                 snapshot = snapshot,
                 runState = runState,

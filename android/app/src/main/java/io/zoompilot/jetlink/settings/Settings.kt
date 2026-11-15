@@ -37,9 +37,9 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 
     /** One full, unchanged driving graph through NNAPI, CPU fallbacks forbidden.
      * A compatibility failure is a valid negative test result, not a slow CPU
-     * benchmark. Use ONLY offroad on Pixel 7 Pro / Tensor G2.
+     * benchmark. Diagnostic use only; USB and remote frame serving are disabled.
      */
-    G2FullNnapi(Backend.Ort, "nnapi-strict", "G2 full model · strict NNAPI"),
+    G2FullNnapi(Backend.Ort, "nnapi-strict", "Full model · Tensor NNAPI"),
 
     /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
     Gpu(Backend.LiteRt, "gpu", "GPU"),
@@ -96,9 +96,10 @@ enum class Processor(val backend: Backend, val device: String, val title: String
          */
         fun choices(
             qualcomm: Boolean, tensorNpu: Boolean, emulator: Boolean,
-            current: Processor, tensorG2: Boolean = false
+            current: Processor, tensorG2: Boolean = false, tensorG6: Boolean = false
         ): List<Processor> = when {
             emulator -> entries
+            tensorG6 -> listOf(G2FullNnapi)
             qualcomm -> entries.filter { it != TensorNpu && it != G2FullNnapi && (it != Cpu || current == Cpu) }
             tensorNpu -> listOf(Auto, TensorNpu, Gpu, Cpu)
             tensorG2 -> listOf(Auto, Gpu, G2FullNnapi, Cpu)
@@ -160,7 +161,7 @@ class Settings(context: Context) {
     }
 
     private fun read(): SettingsValues {
-        val defaults = SettingsValues()
+        val defaults = SettingsValues(processor = if (Chip.isTensorG6) Processor.G2FullNnapi else Processor.Auto)
         val port = prefs.getInt(PORT, defaults.port)
         return SettingsValues(
             port = if (port in 1..65535) port else defaults.port,

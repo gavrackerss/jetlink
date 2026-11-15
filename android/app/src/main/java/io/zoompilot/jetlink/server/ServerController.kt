@@ -65,6 +65,25 @@ class ServerController(private val context: Context, private val scope: Coroutin
     /** Starts the server with [settings], restarting one that runs. */
     suspend fun start(settings: SettingsValues) = lifecycle.withLock {
         run.value = RunState.Starting
+        if (settings.processor.resolved() == Processor.G2FullNnapi) {
+            val gate = withContext(Dispatchers.IO) {
+                runCatching {
+                    Native.stop()
+                    val devices = NnapiInventory.read()
+                    val lines = listOf("G6 NNAPI v0.1: ${Build.MODEL}; ${Chip.model}; API ${Build.VERSION.SDK_INT}") +
+                        devices.map { "NNAPI_DEVICE name=${it.name} type=${it.type} version=${it.version} feature=${it.feature}" }
+                    logLines.value = logLines.value + lines
+                    lines.forEach { Log.i(TAG, it) }
+                    NnapiGate.blocker(devices)
+                }.getOrElse { "NNAPI inventory failed: ${it.message ?: it.javaClass.simpleName}" }
+            }
+            if (gate != null) {
+                logLines.value = logLines.value + "NO_VERIFIED_NPU_EXECUTION: $gate"
+                run.value = RunState.Failed(gate)
+                return@withLock
+            }
+            logLines.value = logLines.value + "NNAPI preflight: only google-edgetpu accelerator eligible; both CPU fallbacks disabled. Model compatibility, accuracy and 20 FPS are unverified."
+        }
         // the server stops one that runs first
         val error = withContext(Dispatchers.IO) { Native.start(config(settings).toString()) }
         if (error != null) {
@@ -93,7 +112,7 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("port", settings.port)
         // Bench tools reach the server over Wi-Fi or `adb forward`; the comma
         // comes over USB.
-        put("listen", settings.developer)
+        put("listen", settings.developer && processor != Processor.G2FullNnapi)
         // This exact full-model NNAPI test is diagnostic ONLY. Prevent the
         // benchmark backend from serving frames to a connected comma.
         put("usb", processor != Processor.G2FullNnapi)

@@ -8,6 +8,16 @@ import org.junit.Test
 /** What each kind of phone may choose to run the model on. */
 class ProcessorTest {
     @Test
+    fun tensorG6DiagnosticCannotSelectAFallbackRoute() {
+        assertEquals(
+            listOf(Processor.G2FullNnapi),
+            Processor.choices(false, true, false, Processor.Auto, tensorG6 = true),
+        )
+        assertEquals(Backend.Ort, Processor.G2FullNnapi.backend)
+        assertEquals("nnapi-strict", Processor.G2FullNnapi.device)
+        assertEquals(6, Chip.tensorGeneration("Tensor G6"))
+    }
+    @Test
     fun aSnapdragonOffersQnn() {
         assertEquals(
             listOf(Processor.Auto, Processor.Npu, Processor.Gpu, Processor.NpuGpu),
