@@ -174,6 +174,14 @@
       guard let cache = config["cache"] as? String, !cache.isEmpty else {
         throw HostFailure("no cache directory")
       }
+      // The model stays in Jetlink's existing .litertcache; only the GPU
+      // delegate options and its compiled-program cache key change.
+      // Whitelist untrusted UI config before passing it to the C shim.
+      let gpuTuning = config["gpu_tuning"] as? String ?? "default"
+      guard ["default", "texture_weights", "buffer_storage", "high_priority"].contains(gpuTuning) else {
+        throw HostFailure("unknown GPU experiment \(gpuTuning)")
+      }
+      setenv("JETLINK_GPU_TUNE", gpuTuning, 1)
       let backend = try Host.backend(config)
       let configuration = Server.Configuration(
         port: UInt16(clamping: (config["port"] as? NSNumber)?.intValue ?? Int(Wire.defaultPort)),

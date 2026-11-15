@@ -87,6 +87,8 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("cache", cacheDirectory.absolutePath)
         put("backend", processor.backend.id)
         put("device", processor.device)
+        // Offroad GPU weight/layout experiments. Does not change model artifact identity.
+        put("gpu_tuning", settings.gpuTuning.key)
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
         put("port", settings.port)

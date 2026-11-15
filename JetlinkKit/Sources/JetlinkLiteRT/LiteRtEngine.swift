@@ -28,7 +28,12 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   public let fullyAccelerated: Bool
   /// Whether the looped state stays in the accelerator's memory.
   public var stateOnDevice: Bool { !deviceState.isEmpty }
-  public override var notes: String { stateOnDevice ? "state on the \(hardware.name)" : "" }
+  public override var notes: String {
+    let state = stateOnDevice ? "state on the \(hardware.name)" : ""
+    guard hardware == .gpu else { return state }
+    let mode = getenv("JETLINK_GPU_TUNE").map { String(cString: $0) } ?? "default"
+    return state.isEmpty ? "GPU tuning: \(mode)" : "\(state), GPU tuning: \(mode)"
+  }
   public override var accelerator: String { label }
 
   private var model: LiteRtModel?

@@ -112,11 +112,29 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     }
 }
 
+/**
+ * Controlled GPU-only experiments for Jetlink's 1x1 convolution-heavy
+ * Light Speed 2 workload. These map directly to LiteRT 2.2 GPU TOML keys.
+ * They are NOT validated for driving; use offroad Benchmark first.
+ */
+enum class GpuTuning(val key: String, val title: String) {
+    Stock("default", "Stock GPU (baseline)"),
+    TextureWeights("texture_weights", "Texture weights"),
+    BufferStorage("buffer_storage", "Buffer storage"),
+    HighPriority("high_priority", "High GPU priority");
+
+    companion object {
+        fun of(key: String?): GpuTuning = entries.firstOrNull { it.key == key } ?: Stock
+    }
+}
+
 /** The few things worth changing on a phone, kept in SharedPreferences. */
 data class SettingsValues(
     /** Where bench tools such as `bench_link.py --host` reach the phone, with [developer] on. */
     val port: Int = 5599,
     val processor: Processor = Processor.Auto,
+    /** LiteRT GPU kernel/storage experiment. Defaults to the original behaviour. */
+    val gpuTuning: GpuTuning = GpuTuning.Stock,
     /** The NPU held in burst mode between frames rather than let it settle. */
     val keepNpuAwake: Boolean = true,
     /** A CPU core kept busy between frames. */
@@ -141,6 +159,7 @@ class Settings(context: Context) {
         prefs.edit()
             .putInt(PORT, next.port)
             .putString(PROCESSOR, next.processor.device)
+            .putString(GPU_TUNING, next.gpuTuning.key)
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
@@ -158,6 +177,7 @@ class Settings(context: Context) {
             processor = Processor.of(prefs.getString(PROCESSOR, null))
                 ?.takeIf { it in Chip.processors(it) }
                 ?: defaults.processor,
+            gpuTuning = GpuTuning.of(prefs.getString(GPU_TUNING, null)),
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
@@ -169,6 +189,7 @@ class Settings(context: Context) {
         private const val VERSION = "version"
         private const val PORT = "port"
         private const val PROCESSOR = "processor"
+        private const val GPU_TUNING = "gpuTuning"
         private const val KEEP_NPU_AWAKE = "keepNpuAwake"
         private const val KEEP_CPU_AWAKE = "keepCpuAwake"
         private const val KEEP_SCREEN_ON = "keepScreenOn"

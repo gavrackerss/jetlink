@@ -54,6 +54,7 @@ import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerService
 import io.zoompilot.jetlink.server.Snapshot
 import io.zoompilot.jetlink.settings.Chip
+import io.zoompilot.jetlink.settings.GpuTuning
 import io.zoompilot.jetlink.settings.Processor
 import io.zoompilot.jetlink.settings.SettingsValues
 import io.zoompilot.jetlink.ui.Format
@@ -301,6 +302,54 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
                     )
                 }
             }
+        }
+        if (values.processor.resolved(info.automatic) == Processor.Gpu) {
+            RowDivider()
+            var choosingGpuTuning by remember { mutableStateOf(false) }
+            Box {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(role = Role.DropdownList, enabled = !info.snapshot.connected) {
+                            choosingGpuTuning = true
+                        }
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("GPU experiment", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        values.gpuTuning.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                DropdownMenu(
+                    expanded = choosingGpuTuning,
+                    onDismissRequest = { choosingGpuTuning = false },
+                    modifier = Modifier.background(colors.card),
+                ) {
+                    GpuTuning.entries.forEach { tuning ->
+                        DropdownMenuItem(
+                            text = { Text(tuning.title) },
+                            onClick = {
+                                choosingGpuTuning = false
+                                if (tuning != values.gpuTuning) {
+                                    actions.update { it.copy(gpuTuning = tuning) }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+            RowDivider()
+            Text(
+                "Diagnostic only: compare variants offroad using Benchmark. Changing this restarts Jetlink, but reuses the prepared model.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.secondaryText,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
         if (values.processor.usesQnn) {
             RowDivider()
