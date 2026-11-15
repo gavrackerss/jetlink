@@ -62,6 +62,7 @@ public protocol Engine: AnyObject {
   func flushTiming()
   /// Optional in-engine operator profiling during offroad benchmarks.
   func beginOperatorProfile() -> Bool
+  func operatorProfileFailure() -> String?
   func endOperatorProfile() -> String?
   func close()
 }
@@ -94,6 +95,7 @@ extension Engine {
   public func runIdle() throws { try run() }
   public func flushTiming() {}
   public func beginOperatorProfile() -> Bool { false }
+  public func operatorProfileFailure() -> String? { nil }
   public func endOperatorProfile() -> String? { nil }
 }
 
